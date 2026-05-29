@@ -15,12 +15,20 @@ type Frequency = 1 | 2 | 4 | 12 | 365;
 type Language = 'es' | 'en';
 type CurrencyCode = 'EUR' | 'USD' | 'GBP';
 type ChartMode = 'total' | 'breakdown';
+type MarketProfile = 'conservative' | 'indexed' | 'aggressive' | 'crypto';
 type Inputs = {
   initialCapital: number;
   periodicContribution: number;
   contributionFrequency: Frequency;
   annualInterestRate: number;
   errorMargin: number;
+  marketProfile: MarketProfile;
+  annualVolatility: number;
+  realisticMode: boolean;
+  inflationRate: number;
+  annualFee: number;
+  taxRate: number;
+  targetAmount: number;
   monteCarloRuns: number;
   capitalizationFrequency: Frequency;
   years: number;
@@ -32,11 +40,32 @@ type MonteCarloResult = {
   p50: number;
   p90: number;
   lossProbability: number;
+  targetProbability: number;
+  averageMaxDrawdown: number;
+  averageCrisisYears: number;
 };
 
 const savedConfigsKey = 'compound-interest-saved-configs';
 const savedLanguageKey = 'compound-interest-language';
 const savedCurrencyKey = 'compound-interest-currency';
+
+const marketProfiles: Record<
+  MarketProfile,
+  {
+    expectedReturn: number;
+    volatility: number;
+    inflationRate: number;
+    annualFee: number;
+    crashProbability: number;
+    crashMin: number;
+    crashMax: number;
+  }
+> = {
+  conservative: { expectedReturn: 3.5, volatility: 6, inflationRate: 2, annualFee: 0.25, crashProbability: 0.05, crashMin: 8, crashMax: 18 },
+  indexed: { expectedReturn: 7, volatility: 15, inflationRate: 2, annualFee: 0.2, crashProbability: 0.1, crashMin: 15, crashMax: 35 },
+  aggressive: { expectedReturn: 9, volatility: 22, inflationRate: 2.2, annualFee: 0.35, crashProbability: 0.13, crashMin: 20, crashMax: 45 },
+  crypto: { expectedReturn: 12, volatility: 65, inflationRate: 2.5, annualFee: 0.6, crashProbability: 0.22, crashMin: 35, crashMax: 75 }
+};
 
 const defaultInputs: Inputs = {
   initialCapital: 5000,
@@ -44,6 +73,13 @@ const defaultInputs: Inputs = {
   contributionFrequency: 12,
   annualInterestRate: 7,
   errorMargin: 2,
+  marketProfile: 'indexed',
+  annualVolatility: 15,
+  realisticMode: true,
+  inflationRate: 2,
+  annualFee: 0.2,
+  taxRate: 19,
+  targetAmount: 100000,
   monteCarloRuns: 1000,
   capitalizationFrequency: 12,
   years: 20
@@ -68,11 +104,21 @@ const translations = {
     },
     form: {
       title: 'Datos de la inversi\u00f3n',
+      capitalSection: 'Capital y aportaciones',
+      marketSection: 'Supuestos de mercado',
       initialCapital: 'Capital inicial',
       periodicContribution: 'Aportaci\u00f3n peri\u00f3dica',
       contributionFrequency: 'Frecuencia de aportaci\u00f3n',
       annualInterestRate: 'Inter\u00e9s anual',
       errorMargin: 'Margen de error',
+      marketProfile: 'Perfil de cartera',
+      annualVolatility: 'Volatilidad anual',
+      realisticMode: 'Modo realista',
+      crisisPerYear: 'crisis/a',
+      inflationRate: 'Inflaci\u00f3n anual',
+      annualFee: 'Comisi\u00f3n anual',
+      taxRate: 'Impuestos ganancias',
+      targetAmount: 'Objetivo',
       monteCarloRuns: 'Simulaciones',
       capitalization: 'Capitalizaci\u00f3n',
       duration: 'Duraci\u00f3n',
@@ -89,6 +135,12 @@ const translations = {
       quarterly: 'Trimestral',
       monthly: 'Mensual',
       daily: 'Diaria'
+    },
+    marketProfiles: {
+      conservative: 'Conservador',
+      indexed: 'Indexado global',
+      aggressive: 'Agresivo',
+      crypto: 'Crypto'
     },
     configs: {
       title: 'Configuraciones',
@@ -113,7 +165,11 @@ const translations = {
       contributed: 'Total aportado',
       interest: 'Intereses',
       gainPercent: 'Ganancia',
-      estimatedRange: 'Rango estimado'
+      estimatedRange: 'Rango estimado',
+      netAfterTax: 'Neto tras impuestos',
+      realValue: 'Valor real',
+      targetYear: 'A\u00f1o objetivo',
+      targetNotReached: 'No llega'
     },
     chart: {
       title: 'Evoluci\u00f3n',
@@ -140,11 +196,14 @@ const translations = {
     },
     monteCarlo: {
       title: 'Monte Carlo',
-      subtitle: 'Distribuci\u00f3n estimada usando el margen de error como volatilidad anual.',
+      subtitle: 'Distribuci\u00f3n estimada usando volatilidad, objetivo y escenarios aleatorios.',
       p10: 'P10',
       p50: 'Mediana',
       p90: 'P90',
       lossProbability: 'Prob. p\u00e9rdida',
+      targetProbability: 'Prob. objetivo',
+      averageMaxDrawdown: 'Drawdown medio',
+      averageCrisisYears: 'Crisis media',
       simulationsSuffix: 'sim.'
     },
     locale: 'es-ES'
@@ -167,11 +226,21 @@ const translations = {
     },
     form: {
       title: 'Investment details',
+      capitalSection: 'Capital and contributions',
+      marketSection: 'Market assumptions',
       initialCapital: 'Starting capital',
       periodicContribution: 'Recurring contribution',
       contributionFrequency: 'Contribution frequency',
       annualInterestRate: 'Annual interest',
       errorMargin: 'Error margin',
+      marketProfile: 'Portfolio profile',
+      annualVolatility: 'Annual volatility',
+      realisticMode: 'Realistic mode',
+      crisisPerYear: 'crisis/yr',
+      inflationRate: 'Annual inflation',
+      annualFee: 'Annual fee',
+      taxRate: 'Capital gains tax',
+      targetAmount: 'Target',
       monteCarloRuns: 'Simulations',
       capitalization: 'Compounding',
       duration: 'Duration',
@@ -188,6 +257,12 @@ const translations = {
       quarterly: 'Quarterly',
       monthly: 'Monthly',
       daily: 'Daily'
+    },
+    marketProfiles: {
+      conservative: 'Conservative',
+      indexed: 'Global index',
+      aggressive: 'Aggressive',
+      crypto: 'Crypto'
     },
     configs: {
       title: 'Configurations',
@@ -212,7 +287,11 @@ const translations = {
       contributed: 'Total contributed',
       interest: 'Interest',
       gainPercent: 'Gain',
-      estimatedRange: 'Estimated range'
+      estimatedRange: 'Estimated range',
+      netAfterTax: 'After-tax net',
+      realValue: 'Real value',
+      targetYear: 'Target year',
+      targetNotReached: 'Not reached'
     },
     chart: {
       title: 'Growth',
@@ -239,11 +318,14 @@ const translations = {
     },
     monteCarlo: {
       title: 'Monte Carlo',
-      subtitle: 'Estimated distribution using the error margin as annual volatility.',
+      subtitle: 'Estimated distribution using volatility, target, and random scenarios.',
       p10: 'P10',
       p50: 'Median',
       p90: 'P90',
       lossProbability: 'Loss prob.',
+      targetProbability: 'Target prob.',
+      averageMaxDrawdown: 'Avg. drawdown',
+      averageCrisisYears: 'Avg. crisis',
       simulationsSuffix: 'sim.'
     },
     locale: 'en-US'
@@ -280,9 +362,18 @@ function getContributionOptions(language: Language) {
   ] satisfies Array<{ label: string; value: Frequency }>;
 }
 
+function getMarketProfileOptions(language: Language) {
+  const labels = translations[language].marketProfiles;
+  return (Object.keys(marketProfiles) as MarketProfile[]).map((profile) => ({
+    label: labels[profile],
+    value: profile
+  }));
+}
+
 function calculateCompoundInterest(inputs: Inputs, annualInterestRate = inputs.annualInterestRate): YearRow[] {
   const months = Math.max(0, Math.round(inputs.years * 12));
-  const periodicRate = annualInterestRate / 100 / inputs.capitalizationFrequency;
+  const netAnnualRate = annualInterestRate - inputs.annualFee;
+  const periodicRate = netAnnualRate / 100 / inputs.capitalizationFrequency;
   const capitalizationMonths = 12 / inputs.capitalizationFrequency;
   const contributionMonths = 12 / inputs.contributionFrequency;
   let balance = inputs.initialCapital;
@@ -306,6 +397,20 @@ function calculateCompoundInterest(inputs: Inputs, annualInterestRate = inputs.a
   return rows;
 }
 
+function afterTaxValue(total: number, contributed: number, taxRate: number) {
+  const taxableGain = Math.max(0, total - contributed);
+  return total - taxableGain * (taxRate / 100);
+}
+
+function realValue(value: number, inflationRate: number, years: number) {
+  return value / (1 + inflationRate / 100) ** Math.max(0, years);
+}
+
+function getTargetYear(rows: YearRow[], targetAmount: number) {
+  const targetRow = rows.find((row) => row.total >= targetAmount);
+  return targetRow?.year;
+}
+
 function randomNormal() {
   const first = Math.max(Number.MIN_VALUE, Math.random());
   const second = Math.random();
@@ -322,14 +427,24 @@ function runMonteCarlo(inputs: Inputs): MonteCarloResult {
   const months = Math.max(0, Math.round(inputs.years * 12));
   const contributionMonths = 12 / inputs.contributionFrequency;
   const simulations = Math.max(100, Math.min(10000, Math.round(inputs.monteCarloRuns)));
-  const monthlyMean = inputs.annualInterestRate / 100 / 12;
-  const monthlyVolatility = inputs.errorMargin / 100 / Math.sqrt(12);
+  const profile = marketProfiles[inputs.marketProfile] ?? marketProfiles.indexed;
+  const netAnnualReturn = (inputs.annualInterestRate - inputs.annualFee) / 100;
+  const annualVolatility = inputs.annualVolatility / 100;
+  const monthlyMean = netAnnualReturn / 12;
+  const monthlyVolatility = annualVolatility / Math.sqrt(12);
+  const logMean = (netAnnualReturn - (annualVolatility ** 2) / 2) / 12;
   const finals: number[] = [];
   let lossCount = 0;
+  let targetCount = 0;
+  let drawdownSum = 0;
+  let crisisYearsSum = 0;
 
   for (let simulation = 0; simulation < simulations; simulation += 1) {
     let balance = inputs.initialCapital;
     let contributed = inputs.initialCapital;
+    let peak = Math.max(balance, 0);
+    let maxDrawdown = 0;
+    let crisisYears = 0;
 
     for (let month = 1; month <= months; month += 1) {
       if (month % contributionMonths === 0) {
@@ -337,11 +452,23 @@ function runMonteCarlo(inputs: Inputs): MonteCarloResult {
         contributed += inputs.periodicContribution;
       }
 
-      const monthlyReturn = Math.max(-0.95, monthlyMean + randomNormal() * monthlyVolatility);
+      const monthlyReturn = inputs.realisticMode
+        ? Math.exp(logMean + randomNormal() * monthlyVolatility) - 1
+        : monthlyMean + randomNormal() * monthlyVolatility;
       balance *= 1 + monthlyReturn;
+      if (inputs.realisticMode && month % 12 === 0 && Math.random() < profile.crashProbability) {
+        const crash = (profile.crashMin + Math.random() * (profile.crashMax - profile.crashMin)) / 100;
+        balance *= 1 - crash;
+        crisisYears += 1;
+      }
+      peak = Math.max(peak, balance);
+      if (peak > 0) maxDrawdown = Math.max(maxDrawdown, ((peak - balance) / peak) * 100);
     }
 
     if (balance < contributed) lossCount += 1;
+    if (balance >= inputs.targetAmount) targetCount += 1;
+    drawdownSum += maxDrawdown;
+    crisisYearsSum += crisisYears;
     finals.push(balance);
   }
 
@@ -350,7 +477,10 @@ function runMonteCarlo(inputs: Inputs): MonteCarloResult {
     p10: percentile(finals, 0.1),
     p50: percentile(finals, 0.5),
     p90: percentile(finals, 0.9),
-    lossProbability: (lossCount / simulations) * 100
+    lossProbability: (lossCount / simulations) * 100,
+    targetProbability: (targetCount / simulations) * 100,
+    averageMaxDrawdown: drawdownSum / simulations,
+    averageCrisisYears: crisisYearsSum / simulations
   };
 }
 
@@ -636,6 +766,7 @@ function App() {
   const t = translations[language];
   const frequencyOptions = React.useMemo(() => getFrequencyOptions(language), [language]);
   const contributionOptions = React.useMemo(() => getContributionOptions(language), [language]);
+  const marketProfileOptions = React.useMemo(() => getMarketProfileOptions(language), [language]);
   const currency = React.useMemo(
     () =>
       new Intl.NumberFormat(t.locale, {
@@ -656,6 +787,7 @@ function App() {
   const numberFormatter = React.useMemo(() => new Intl.NumberFormat(t.locale, { maximumFractionDigits: 2 }), [t.locale]);
   const rows = React.useMemo(() => calculateCompoundInterest(inputs), [inputs]);
   const final = rows[rows.length - 1];
+  const selectedMarketProfile = marketProfiles[inputs.marketProfile] ?? marketProfiles.indexed;
   const bearishRate = Math.max(0, inputs.annualInterestRate - inputs.errorMargin);
   const bullishRate = inputs.annualInterestRate + inputs.errorMargin;
   const bearishRows = React.useMemo(() => calculateCompoundInterest(inputs, bearishRate), [bearishRate, inputs]);
@@ -663,6 +795,9 @@ function App() {
   const bearishFinal = bearishRows[bearishRows.length - 1];
   const bullishFinal = bullishRows[bullishRows.length - 1];
   const gainPercent = final.contributed > 0 ? (final.interest / final.contributed) * 100 : 0;
+  const netFinal = afterTaxValue(final.total, final.contributed, inputs.taxRate);
+  const realFinal = realValue(netFinal, inputs.inflationRate, inputs.years);
+  const targetYear = getTargetYear(rows, inputs.targetAmount);
   const monteCarlo = React.useMemo(() => runMonteCarlo(inputs), [inputs]);
   const compareFirst = savedConfigs.find((config) => config.id === compareIds.first);
   const compareSecond = savedConfigs.find((config) => config.id === compareIds.second);
@@ -674,6 +809,15 @@ function App() {
   const { canInstall, install, isInstalled } = useInstallPrompt();
   const update = <K extends keyof Inputs>(key: K, value: Inputs[K]) =>
     setInputs((current) => ({ ...current, [key]: value }));
+  const updateMarketProfile = (profile: MarketProfile) =>
+    setInputs((current) => ({
+      ...current,
+      marketProfile: profile,
+      annualInterestRate: marketProfiles[profile].expectedReturn,
+      annualVolatility: marketProfiles[profile].volatility,
+      inflationRate: marketProfiles[profile].inflationRate,
+      annualFee: marketProfiles[profile].annualFee
+    }));
   const formatReturn = (row: YearRow) => {
     if (row.contributed <= 0) return '0%';
     return `${numberFormatter.format((row.interest / row.contributed) * 100)}%`;
@@ -795,71 +939,137 @@ function App() {
             </div>
             <CurrencySelector currencyCode={currencyCode} label={t.controls.currency} onChange={changeCurrency} />
           </div>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-1">
-            <Field
-              label={t.form.initialCapital}
-              value={inputs.initialCapital}
-              min={0}
-              step={100}
-              suffix={'\u20ac'}
-              onChange={(value) => update('initialCapital', value)}
-            />
-            <Field
-              label={t.form.periodicContribution}
-              value={inputs.periodicContribution}
-              min={0}
-              step={25}
-              suffix={'\u20ac'}
-              onChange={(value) => update('periodicContribution', value)}
-            />
-            <SelectField
-              label={t.form.contributionFrequency}
-              value={inputs.contributionFrequency}
-              options={contributionOptions}
-              onChange={(value) => update('contributionFrequency', Number(value) as Frequency)}
-            />
-            <Field
-              label={t.form.annualInterestRate}
-              value={inputs.annualInterestRate}
-              min={0}
-              max={100}
-              step={0.1}
-              suffix="%"
-              onChange={(value) => update('annualInterestRate', value)}
-            />
-            <Field
-              label={t.form.errorMargin}
-              value={inputs.errorMargin}
-              min={0}
-              max={50}
-              step={0.1}
-              suffix={t.risk.points}
-              onChange={(value) => update('errorMargin', value)}
-            />
-            <Field
-              label={t.form.monteCarloRuns}
-              value={inputs.monteCarloRuns}
-              min={100}
-              max={10000}
-              step={100}
-              suffix={t.monteCarlo.simulationsSuffix}
-              onChange={(value) => update('monteCarloRuns', value)}
-            />
-            <SelectField
-              label={t.form.capitalization}
-              value={inputs.capitalizationFrequency}
-              options={frequencyOptions}
-              onChange={(value) => update('capitalizationFrequency', Number(value) as Frequency)}
-            />
-            <Field
-              label={t.form.duration}
-              value={inputs.years}
-              min={1}
-              max={80}
-              step={1}
-              suffix={t.form.yearsSuffix}
-              onChange={(value) => update('years', value)}
-            />
+          <div className="grid gap-4">
+            <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+              <h3 className="mb-4 text-sm font-bold uppercase tracking-[0.08em] text-slate-400">{t.form.capitalSection}</h3>
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-1">
+                <Field
+                  label={t.form.initialCapital}
+                  value={inputs.initialCapital}
+                  min={0}
+                  step={100}
+                  suffix={currencyCode}
+                  onChange={(value) => update('initialCapital', value)}
+                />
+                <Field
+                  label={t.form.periodicContribution}
+                  value={inputs.periodicContribution}
+                  min={0}
+                  step={25}
+                  suffix={currencyCode}
+                  onChange={(value) => update('periodicContribution', value)}
+                />
+                <SelectField
+                  label={t.form.contributionFrequency}
+                  value={inputs.contributionFrequency}
+                  options={contributionOptions}
+                  onChange={(value) => update('contributionFrequency', Number(value) as Frequency)}
+                />
+                <SelectField
+                  label={t.form.capitalization}
+                  value={inputs.capitalizationFrequency}
+                  options={frequencyOptions}
+                  onChange={(value) => update('capitalizationFrequency', Number(value) as Frequency)}
+                />
+                <Field
+                  label={t.form.duration}
+                  value={inputs.years}
+                  min={1}
+                  max={80}
+                  step={1}
+                  suffix={t.form.yearsSuffix}
+                  onChange={(value) => update('years', value)}
+                />
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-blue-300/15 bg-blue-400/[0.04] p-4">
+              <h3 className="mb-4 text-sm font-bold uppercase tracking-[0.08em] text-blue-100">{t.form.marketSection}</h3>
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-1">
+                <Field
+                  label={t.form.annualInterestRate}
+                  value={inputs.annualInterestRate}
+                  min={0}
+                  max={100}
+                  step={0.1}
+                  suffix="%"
+                  onChange={(value) => update('annualInterestRate', value)}
+                />
+                <Field
+                  label={t.form.errorMargin}
+                  value={inputs.errorMargin}
+                  min={0}
+                  max={50}
+                  step={0.1}
+                  suffix={t.risk.points}
+                  onChange={(value) => update('errorMargin', value)}
+                />
+                <SelectField
+                  label={t.form.marketProfile}
+                  value={inputs.marketProfile}
+                  options={marketProfileOptions}
+                  onChange={(value) => updateMarketProfile(value as MarketProfile)}
+                />
+                <label className="flex min-h-[76px] items-center justify-between gap-3 rounded-2xl border border-slate-700 bg-slate-900/80 px-4 py-3">
+                  <span className="min-w-0">
+                    <span className="block text-sm font-medium text-slate-300">{t.form.realisticMode}</span>
+                    <span className="mt-1 block text-xs leading-5 text-slate-500">
+                      {numberFormatter.format(selectedMarketProfile.volatility)}% vol. | {numberFormatter.format(selectedMarketProfile.crashProbability * 100)}% {t.form.crisisPerYear}
+                    </span>
+                  </span>
+                  <input
+                    className="h-5 w-5 shrink-0 accent-blue-400"
+                    type="checkbox"
+                    checked={inputs.realisticMode}
+                    onChange={(event) => update('realisticMode', event.target.checked)}
+                  />
+                </label>
+                <Field
+                  label={t.form.inflationRate}
+                  value={inputs.inflationRate}
+                  min={0}
+                  max={30}
+                  step={0.1}
+                  suffix="%"
+                  onChange={(value) => update('inflationRate', value)}
+                />
+                <Field
+                  label={t.form.annualFee}
+                  value={inputs.annualFee}
+                  min={0}
+                  max={10}
+                  step={0.05}
+                  suffix="%"
+                  onChange={(value) => update('annualFee', value)}
+                />
+                <Field
+                  label={t.form.taxRate}
+                  value={inputs.taxRate}
+                  min={0}
+                  max={60}
+                  step={0.5}
+                  suffix="%"
+                  onChange={(value) => update('taxRate', value)}
+                />
+                <Field
+                  label={t.form.targetAmount}
+                  value={inputs.targetAmount}
+                  min={0}
+                  step={1000}
+                  suffix={currencyCode}
+                  onChange={(value) => update('targetAmount', value)}
+                />
+                <Field
+                  label={t.form.monteCarloRuns}
+                  value={inputs.monteCarloRuns}
+                  min={100}
+                  max={10000}
+                  step={100}
+                  suffix={t.monteCarlo.simulationsSuffix}
+                  onChange={(value) => update('monteCarloRuns', value)}
+                />
+              </div>
+            </div>
           </div>
 
         </form>
@@ -885,10 +1095,17 @@ function App() {
                 </p>
               </div>
 
-              <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-2">
                 <StatCard title={t.stats.contributed} value={currency.format(final.contributed)} icon={<PiggyBank size={18} />} />
                 <StatCard title={t.stats.interest} value={currency.format(final.interest)} icon={<Calculator size={18} />} />
                 <StatCard title={t.stats.gainPercent} value={`${numberFormatter.format(gainPercent)}%`} icon={<BarChart3 size={18} />} />
+                <StatCard title={t.stats.netAfterTax} value={currency.format(netFinal)} icon={<Calculator size={18} />} />
+                <StatCard title={t.stats.realValue} value={currency.format(realFinal)} icon={<PiggyBank size={18} />} />
+                <StatCard
+                  title={t.stats.targetYear}
+                  value={targetYear ? `${targetYear}${t.chart.yearShort}` : t.stats.targetNotReached}
+                  icon={<TrendingUp size={18} />}
+                />
               </div>
             </div>
 
@@ -927,7 +1144,7 @@ function App() {
                   {numberFormatter.format(inputs.monteCarloRuns)} {t.monteCarlo.simulationsSuffix}
                 </span>
               </div>
-              <div className="grid gap-3 sm:grid-cols-4">
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                 {[
                   { label: t.monteCarlo.p10, value: currency.format(monteCarlo.p10), tone: 'text-rose-200' },
                   { label: t.monteCarlo.p50, value: currency.format(monteCarlo.p50), tone: 'text-blue-100' },
@@ -936,11 +1153,26 @@ function App() {
                     label: t.monteCarlo.lossProbability,
                     value: `${numberFormatter.format(monteCarlo.lossProbability)}%`,
                     tone: 'text-amber-100'
+                  },
+                  {
+                    label: t.monteCarlo.targetProbability,
+                    value: `${numberFormatter.format(monteCarlo.targetProbability)}%`,
+                    tone: 'text-cyan-100'
+                  },
+                  {
+                    label: t.monteCarlo.averageMaxDrawdown,
+                    value: `${numberFormatter.format(monteCarlo.averageMaxDrawdown)}%`,
+                    tone: 'text-orange-100'
+                  },
+                  {
+                    label: t.monteCarlo.averageCrisisYears,
+                    value: numberFormatter.format(monteCarlo.averageCrisisYears),
+                    tone: 'text-slate-100'
                   }
                 ].map((metric) => (
                   <div className="rounded-xl bg-white/[0.04] p-3" key={metric.label}>
                     <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">{metric.label}</p>
-                    <p className={`mt-1 truncate text-lg font-black ${metric.tone}`}>{metric.value}</p>
+                    <p className={`mt-1 break-words text-lg font-black ${metric.tone}`}>{metric.value}</p>
                   </div>
                 ))}
               </div>
