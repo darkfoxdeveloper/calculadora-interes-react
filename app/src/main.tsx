@@ -21,11 +21,18 @@ type Inputs = {
   contributionFrequency: Frequency;
   annualInterestRate: number;
   errorMargin: number;
+  monteCarloRuns: number;
   capitalizationFrequency: Frequency;
   years: number;
 };
 type YearRow = { year: number; total: number; contributed: number; interest: number };
 type SavedConfig = { id: string; name: string; inputs: Inputs; createdAt: number };
+type MonteCarloResult = {
+  p10: number;
+  p50: number;
+  p90: number;
+  lossProbability: number;
+};
 
 const savedConfigsKey = 'compound-interest-saved-configs';
 const savedLanguageKey = 'compound-interest-language';
@@ -37,6 +44,7 @@ const defaultInputs: Inputs = {
   contributionFrequency: 12,
   annualInterestRate: 7,
   errorMargin: 2,
+  monteCarloRuns: 1000,
   capitalizationFrequency: 12,
   years: 20
 };
@@ -65,6 +73,7 @@ const translations = {
       contributionFrequency: 'Frecuencia de aportaci\u00f3n',
       annualInterestRate: 'Inter\u00e9s anual',
       errorMargin: 'Margen de error',
+      monteCarloRuns: 'Simulaciones',
       capitalization: 'Capitalizaci\u00f3n',
       duration: 'Duraci\u00f3n',
       yearsSuffix: 'a\u00f1os'
@@ -129,6 +138,15 @@ const translations = {
       bullish: 'Alcista',
       points: 'pp'
     },
+    monteCarlo: {
+      title: 'Monte Carlo',
+      subtitle: 'Distribuci\u00f3n estimada usando el margen de error como volatilidad anual.',
+      p10: 'P10',
+      p50: 'Mediana',
+      p90: 'P90',
+      lossProbability: 'Prob. p\u00e9rdida',
+      simulationsSuffix: 'sim.'
+    },
     locale: 'es-ES'
   },
   en: {
@@ -154,6 +172,7 @@ const translations = {
       contributionFrequency: 'Contribution frequency',
       annualInterestRate: 'Annual interest',
       errorMargin: 'Error margin',
+      monteCarloRuns: 'Simulations',
       capitalization: 'Compounding',
       duration: 'Duration',
       yearsSuffix: 'years'
@@ -218,6 +237,15 @@ const translations = {
       bullish: 'Bull',
       points: 'pp'
     },
+    monteCarlo: {
+      title: 'Monte Carlo',
+      subtitle: 'Estimated distribution using the error margin as annual volatility.',
+      p10: 'P10',
+      p50: 'Median',
+      p90: 'P90',
+      lossProbability: 'Loss prob.',
+      simulationsSuffix: 'sim.'
+    },
     locale: 'en-US'
   }
 } as const;
@@ -276,6 +304,54 @@ function calculateCompoundInterest(inputs: Inputs, annualInterestRate = inputs.a
 
   if (rows.length === 0) rows.push({ year: 0, total: balance, contributed, interest: 0 });
   return rows;
+}
+
+function randomNormal() {
+  const first = Math.max(Number.MIN_VALUE, Math.random());
+  const second = Math.random();
+  return Math.sqrt(-2 * Math.log(first)) * Math.cos(2 * Math.PI * second);
+}
+
+function percentile(sortedValues: number[], target: number) {
+  if (sortedValues.length === 0) return 0;
+  const index = Math.min(sortedValues.length - 1, Math.max(0, Math.floor((sortedValues.length - 1) * target)));
+  return sortedValues[index];
+}
+
+function runMonteCarlo(inputs: Inputs): MonteCarloResult {
+  const months = Math.max(0, Math.round(inputs.years * 12));
+  const contributionMonths = 12 / inputs.contributionFrequency;
+  const simulations = Math.max(100, Math.min(10000, Math.round(inputs.monteCarloRuns)));
+  const monthlyMean = inputs.annualInterestRate / 100 / 12;
+  const monthlyVolatility = inputs.errorMargin / 100 / Math.sqrt(12);
+  const finals: number[] = [];
+  let lossCount = 0;
+
+  for (let simulation = 0; simulation < simulations; simulation += 1) {
+    let balance = inputs.initialCapital;
+    let contributed = inputs.initialCapital;
+
+    for (let month = 1; month <= months; month += 1) {
+      if (month % contributionMonths === 0) {
+        balance += inputs.periodicContribution;
+        contributed += inputs.periodicContribution;
+      }
+
+      const monthlyReturn = Math.max(-0.95, monthlyMean + randomNormal() * monthlyVolatility);
+      balance *= 1 + monthlyReturn;
+    }
+
+    if (balance < contributed) lossCount += 1;
+    finals.push(balance);
+  }
+
+  finals.sort((first, second) => first - second);
+  return {
+    p10: percentile(finals, 0.1),
+    p50: percentile(finals, 0.5),
+    p90: percentile(finals, 0.9),
+    lossProbability: (lossCount / simulations) * 100
+  };
 }
 
 function readSavedLanguage() {
@@ -587,6 +663,7 @@ function App() {
   const bearishFinal = bearishRows[bearishRows.length - 1];
   const bullishFinal = bullishRows[bullishRows.length - 1];
   const gainPercent = final.contributed > 0 ? (final.interest / final.contributed) * 100 : 0;
+  const monteCarlo = React.useMemo(() => runMonteCarlo(inputs), [inputs]);
   const compareFirst = savedConfigs.find((config) => config.id === compareIds.first);
   const compareSecond = savedConfigs.find((config) => config.id === compareIds.second);
   const compareFirstRows = compareFirst ? calculateCompoundInterest(compareFirst.inputs) : [];
@@ -759,6 +836,15 @@ function App() {
               suffix={t.risk.points}
               onChange={(value) => update('errorMargin', value)}
             />
+            <Field
+              label={t.form.monteCarloRuns}
+              value={inputs.monteCarloRuns}
+              min={100}
+              max={10000}
+              step={100}
+              suffix={t.monteCarlo.simulationsSuffix}
+              onChange={(value) => update('monteCarloRuns', value)}
+            />
             <SelectField
               label={t.form.capitalization}
               value={inputs.capitalizationFrequency}
@@ -826,6 +912,35 @@ function App() {
                   <div className={scenario.align} key={scenario.rate}>
                     <p className="font-bold text-white">{currency.format(scenario.value)}</p>
                     <p className="mt-1 text-xs text-slate-400">{numberFormatter.format(scenario.rate)}%</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="mt-4 rounded-2xl border border-white/10 bg-slate-950/45 p-4">
+              <div className="mb-4 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+                <div>
+                  <h3 className="font-semibold text-white">{t.monteCarlo.title}</h3>
+                  <p className="mt-1 text-sm text-slate-500">{t.monteCarlo.subtitle}</p>
+                </div>
+                <span className="text-sm font-bold text-blue-100">
+                  {numberFormatter.format(inputs.monteCarloRuns)} {t.monteCarlo.simulationsSuffix}
+                </span>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-4">
+                {[
+                  { label: t.monteCarlo.p10, value: currency.format(monteCarlo.p10), tone: 'text-rose-200' },
+                  { label: t.monteCarlo.p50, value: currency.format(monteCarlo.p50), tone: 'text-blue-100' },
+                  { label: t.monteCarlo.p90, value: currency.format(monteCarlo.p90), tone: 'text-emerald-200' },
+                  {
+                    label: t.monteCarlo.lossProbability,
+                    value: `${numberFormatter.format(monteCarlo.lossProbability)}%`,
+                    tone: 'text-amber-100'
+                  }
+                ].map((metric) => (
+                  <div className="rounded-xl bg-white/[0.04] p-3" key={metric.label}>
+                    <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">{metric.label}</p>
+                    <p className={`mt-1 truncate text-lg font-black ${metric.tone}`}>{metric.value}</p>
                   </div>
                 ))}
               </div>
